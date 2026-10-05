@@ -81,6 +81,7 @@ static NSOperationQueue *g_ops;
  * the fastest interval asked for and fan_out throttles slower handles. (Core
  * mob keeps its own manager for Mob.Motion.) */
 static CMMotionManager *g_motion;
+static BOOL g_acc_on, g_dm_on; // the two streams' running state
 static CMAttitudeReferenceFrame g_dm_frame;
 static int g_proximity_users;
 static BOOL g_proximity_app_enabled; // monitoring was on before our first user
@@ -240,7 +241,7 @@ static ERL_NIF_TERM nif_list(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]
 /* g_queue. Delivers one sample to every handle of `type` whose period has
  * elapsed. `tolerance` (half the stream's interval) absorbs jitter, so a
  * 200 ms handle on a 20 ms stream gets every tenth sample, not every
- * eleventh. */
+ * eleventh; the schedule advances by the period, so jitter doesn't add up. */
 static void fan_out(int type, NSTimeInterval ts, const double *v, unsigned n, int accuracy,
                     double tolerance) {
   double ts_ms = boot_ts_to_unix_ms(ts);
@@ -249,7 +250,7 @@ static void fan_out(int type, NSTimeInterval ts, const double *v, unsigned n, in
       continue;
     if (reg.lastTs > 0 && ts - reg.lastTs < reg.period - tolerance)
       continue;
-    reg.lastTs = ts;
+    reg.lastTs = reg.lastTs > 0 ? MAX(reg.lastTs + reg.period, ts - tolerance) : ts;
     send_reading(reg.pid, reg.handle, v, n, ts_ms, accuracy);
   }
 }
@@ -263,14 +264,13 @@ static void fan_out_error(int type_a, int type_b, NSError *err) {
   }
 }
 
-/* CMMagneticFieldCalibrationAccuracy (-1 uncalibrated .. 2 high) as
- * Android's SENSOR_STATUS_* (0 unreliable .. 3 high). */
+/* CMMagneticFieldCalibrationAccuracy (0 low .. 2 high) as Android's
+ * SENSOR_STATUS_* (1 low .. 3 high). Uncalibrated samples never get here. */
 static int magnetic_accuracy(CMMagneticFieldCalibrationAccuracy a) {
   switch (a) {
-  case CMMagneticFieldCalibrationAccuracyLow: return 1;
   case CMMagneticFieldCalibrationAccuracyMedium: return 2;
   case CMMagneticFieldCalibrationAccuracyHigh: return 3;
-  default: return 0;
+  default: return 1;
   }
 }
 
@@ -294,12 +294,14 @@ static double min_period(int type_a, int type_b, BOOL *has_b) {
  * accelerometer, and device motion for the gyroscope (bias-corrected
  * rotationRate) and magnetic field (calibrated, which needs a
  * magnetometer-corrected reference frame, so that frame is used only while a
- * magnetic handle exists). Called after every motion add or remove. */
+ * magnetic handle exists). Called after every motion add or remove. The
+ * running state is tracked here rather than read back from *Active. */
 static void refresh_motion(void) {
   double acc = min_period(T_ACCELEROMETER, T_ACCELEROMETER, NULL);
   if (acc > 0) {
     g_motion.accelerometerUpdateInterval = acc;
-    if (!g_motion.accelerometerActive) {
+    if (!g_acc_on) {
+      g_acc_on = YES;
       [g_motion startAccelerometerUpdatesToQueue:g_ops
                                      withHandler:^(CMAccelerometerData *d, NSError *err) {
                                        if (err) {
@@ -315,7 +317,8 @@ static void refresh_motion(void) {
                                                g_motion.accelerometerUpdateInterval / 2);
                                      }];
     }
-  } else if (g_motion.accelerometerActive) {
+  } else if (g_acc_on) {
+    g_acc_on = NO;
     [g_motion stopAccelerometerUpdates];
   }
 
@@ -324,10 +327,13 @@ static void refresh_motion(void) {
   if (dm > 0) {
     CMAttitudeReferenceFrame frame = magnetic ? CMAttitudeReferenceFrameXArbitraryCorrectedZVertical
                                               : CMAttitudeReferenceFrameXArbitraryZVertical;
-    if (g_motion.deviceMotionActive && g_dm_frame != frame)
+    if (g_dm_on && g_dm_frame != frame) {
+      g_dm_on = NO;
       [g_motion stopDeviceMotionUpdates];
+    }
     g_motion.deviceMotionUpdateInterval = dm;
-    if (!g_motion.deviceMotionActive) {
+    if (!g_dm_on) {
+      g_dm_on = YES;
       g_dm_frame = frame;
       [g_motion startDeviceMotionUpdatesUsingReferenceFrame:frame
                                                     toQueue:g_ops
@@ -342,13 +348,19 @@ static void refresh_motion(void) {
                                                   double g[3] = {d.rotationRate.x, d.rotationRate.y,
                                                                  d.rotationRate.z};
                                                   fan_out(T_GYROSCOPE, d.timestamp, g, 3, kNoAccuracy, tol);
+                                                  // Uncalibrated (including samples of a
+                                                  // previous non-magnetic frame still queued)
+                                                  // carries no valid field: wait for calibration.
                                                   CMCalibratedMagneticField f = d.magneticField;
+                                                  if (f.accuracy == CMMagneticFieldCalibrationAccuracyUncalibrated)
+                                                    return;
                                                   double m[3] = {f.field.x, f.field.y, f.field.z};
                                                   fan_out(T_MAGNETIC_FIELD, d.timestamp, m, 3,
                                                           magnetic_accuracy(f.accuracy), tol);
                                                 }];
     }
-  } else if (g_motion.deviceMotionActive) {
+  } else if (g_dm_on) {
+    g_dm_on = NO;
     [g_motion stopDeviceMotionUpdates];
   }
 }

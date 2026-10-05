@@ -54,8 +54,10 @@ defmodule MobSensors do
   `timestamp` is Unix time in milliseconds. `accuracy` is Android's
   `SensorManager.SENSOR_STATUS_*` (`-1` no contact, `0` unreliable, `1` low,
   `2` medium, `3` high). It is `nil` where the platform has none: iOS, except
-  for `:magnetic_field` (its calibration accuracy), and Android trigger
-  sensors such as `:significant_motion`.
+  for `:magnetic_field` (its calibration accuracy, `1` to `3`), and Android
+  trigger sensors such as `:significant_motion`. iOS sends no
+  `:magnetic_field` sample until the field is calibrated, so a read can time
+  out on an uncalibrated device.
 
   ## Platforms
 
@@ -66,7 +68,7 @@ defmodule MobSensors do
   | gyroscope / magnetic field | `SensorManager` | `CMMotionManager` device motion (bias-corrected rotation rate; calibrated field) |
   | pressure (barometer) | `SensorManager` | `CMAltimeter` (kPa converted to hPa; ~1 Hz) |
   | proximity | `SensorManager` | `UIDevice` proximity monitoring (iPhone only): near → `[0.0]`, far → `[5.0]` |
-  | step counter | `SensorManager` (steps since boot) | `CMPedometer` (steps since local midnight) |
+  | step counter | `SensorManager` (steps since boot) | `CMPedometer` (steps since the local midnight before the read or stream started) |
   | step history (`steps/2`) | `{:error, :history_unavailable}` (needs Health Connect) | `CMPedometer` query |
   | light, humidity, temperature, gravity, rotation vectors, vendor sensors… | `SensorManager` | not available |
 
