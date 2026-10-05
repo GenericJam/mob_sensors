@@ -41,6 +41,10 @@ object MobSensorsBridge : io.mob.plugin.MobActivityAware, io.mob.plugin.MobPermi
     // nativeDeliverError codes (mirrored in mob_sensors_nif.zig).
     private const val ERR_UNAVAILABLE = 1
 
+    // nativeDeliverReading accuracy for events that carry none (trigger
+    // sensors); mob_sensors_nif.zig turns it into nil.
+    private const val NO_ACCURACY = Int.MIN_VALUE
+
     @Volatile private var appContext: Context? = null
 
     private sealed class Registration {
@@ -113,7 +117,20 @@ object MobSensorsBridge : io.mob.plugin.MobActivityAware, io.mob.plugin.MobPermi
             o.put("wake_up", s.isWakeUpSensor)
             out.put(o)
         }
-        return out.toString()
+        return asciiJson(out.toString())
+    }
+
+    // The NIF reads the string with GetStringUTFChars, which yields Modified
+    // UTF-8 (supplementary characters as surrogate pairs) that a strict JSON
+    // decoder rejects. Escaping everything outside ASCII as \uXXXX makes the
+    // two encodings identical.
+    private fun asciiJson(json: String): String {
+        if (json.all { it.code < 0x80 }) return json
+        val sb = StringBuilder(json.length + 16)
+        for (c in json) {
+            if (c.code < 0x80) sb.append(c) else sb.append(String.format("\\u%04x", c.code))
+        }
+        return sb.toString()
     }
 
     // Float -> shortest decimal double (16.46, not 16.459999084472656).
@@ -139,7 +156,9 @@ object MobSensorsBridge : io.mob.plugin.MobActivityAware, io.mob.plugin.MobPermi
                 Build.VERSION.SDK_INT < 29 ||
                     granted(ctx, android.Manifest.permission.ACTIVITY_RECOGNITION)
             Sensor.TYPE_HEART_RATE, Sensor.TYPE_HEART_BEAT ->
-                granted(ctx, android.Manifest.permission.BODY_SENSORS)
+                // Apps targeting Android 16+ hold the Health permission instead.
+                granted(ctx, android.Manifest.permission.BODY_SENSORS) ||
+                    granted(ctx, "android.permission.health.READ_HEART_RATE")
             else -> true
         }
 
@@ -199,9 +218,13 @@ object MobSensorsBridge : io.mob.plugin.MobActivityAware, io.mob.plugin.MobPermi
         val listener =
             object : TriggerEventListener() {
                 override fun onTrigger(event: TriggerEvent) {
-                    nativeDeliverReading(pid, handle, decimals(event.values), unixMs(event.timestamp), SensorManager.SENSOR_STATUS_ACCURACY_HIGH)
-                    if (registrations[handle] is Registration.Trigger) {
-                        if (!sm.requestTriggerSensor(this, sensor)) nativeDeliverError(pid, handle, ERR_UNAVAILABLE)
+                    nativeDeliverReading(pid, handle, decimals(event.values), unixMs(event.timestamp), NO_ACCURACY)
+                    if (registrations[handle] !is Registration.Trigger) return
+                    if (!sm.requestTriggerSensor(this, sensor)) {
+                        nativeDeliverError(pid, handle, ERR_UNAVAILABLE)
+                    } else if (registrations[handle] == null) {
+                        // sensors_stop ran between the check and the re-arm.
+                        sm.cancelTriggerSensor(this, sensor)
                     }
                 }
             }

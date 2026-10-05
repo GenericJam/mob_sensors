@@ -82,9 +82,13 @@ defmodule MobSensors.Types do
   @typedoc "A standard sensor atom or an Android vendor string type."
   @type t :: atom() | String.t()
 
+  # The Android NIF copies a vendor type into a 256-byte NUL-terminated buffer.
+  @max_string_type_bytes 255
+
   @doc """
   Maps a requested type to the native `{type_code, string_type}` pair:
-  `{code, nil}` for a standard atom, `{-1, string}` for a vendor string.
+  `{code, nil}` for a standard atom, `{-1, string}` for a vendor string (valid
+  UTF-8, 1 to #{@max_string_type_bytes} bytes).
   """
   @spec to_native(term()) :: {:ok, {integer(), String.t() | nil}} | {:error, :unknown_type}
   def to_native(type) when is_atom(type) do
@@ -94,7 +98,11 @@ defmodule MobSensors.Types do
     end
   end
 
-  def to_native(type) when is_binary(type) and type != "", do: {:ok, {-1, type}}
+  def to_native(type)
+      when is_binary(type) and type != "" and byte_size(type) <= @max_string_type_bytes do
+    if String.valid?(type), do: {:ok, {-1, type}}, else: {:error, :unknown_type}
+  end
+
   def to_native(_type), do: {:error, :unknown_type}
 
   @doc """

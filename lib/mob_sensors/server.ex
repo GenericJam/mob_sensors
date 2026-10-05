@@ -16,9 +16,14 @@ defmodule MobSensors.Server do
 
   alias MobSensors.Types
 
+  require Logger
+
   # One-shot reads ask for SENSOR_DELAY_GAME (20 ms) so the first sample of a
   # continuous sensor arrives quickly; on-change sensors ignore the rate.
   @read_period_us 20_000
+
+  # A steps/2 query CoreMotion never answers is reported as {:error, :timeout}.
+  @default_steps_timeout_ms 10_000
 
   @type server :: GenServer.server()
 
@@ -63,7 +68,8 @@ defmodule MobSensors.Server do
   @impl GenServer
   def init(opts) do
     native = Keyword.get(opts, :native, :mob_sensors_nif)
-    state = %{native: native, next: 1, subs: %{}}
+    steps_timeout_ms = Keyword.get(opts, :steps_timeout_ms, @default_steps_timeout_ms)
+    state = %{native: native, steps_timeout_ms: steps_timeout_ms, next: 1, subs: %{}}
     # Listeners whose owner died with a previous server would keep sending to
     # a dead pid forever; nothing else can stop them.
     _ = call_native(state, :stop_all, [])
@@ -75,7 +81,7 @@ defmodule MobSensors.Server do
     infos =
       case call_native(state, :list, []) do
         json when is_binary(json) -> json |> JSON.decode!() |> Enum.map(&to_info/1)
-        :nif_not_loaded -> []
+        :native_unavailable -> []
       end
 
     {:reply, infos, state}
@@ -99,13 +105,21 @@ defmodule MobSensors.Server do
 
     case call_native(state, :steps, [handle, from_ms, to_ms]) do
       :ok ->
-        sub = %{pid: pid, ref: Process.monitor(pid), mode: :steps, from: from_ms, to: to_ms}
+        sub = %{
+          pid: pid,
+          ref: Process.monitor(pid),
+          mode: :steps,
+          from: from_ms,
+          to: to_ms,
+          timer: Process.send_after(self(), {:timeout, handle}, state.steps_timeout_ms)
+        }
+
         {:reply, :ok, put_in(state.subs[handle], sub)}
 
       :history_unavailable ->
         {:reply, {:error, :history_unavailable}, state}
 
-      unavailable when unavailable in [:unavailable, :nif_not_loaded] ->
+      unavailable when unavailable in [:unavailable, :native_unavailable] ->
         {:reply, {:error, :unavailable}, state}
     end
   end
@@ -157,10 +171,14 @@ defmodule MobSensors.Server do
     end
   end
 
-  def handle_info({:read_timeout, handle}, state) do
+  def handle_info({:timeout, handle}, state) do
     case Map.fetch(state.subs, handle) do
       {:ok, %{mode: :read} = sub} ->
         send(sub.pid, {:mob_sensors, :error, sub.type, :timeout})
+        {:noreply, finish(state, handle)}
+
+      {:ok, %{mode: :steps} = sub} ->
+        send(sub.pid, {:mob_sensors, :steps, {:error, :timeout}})
         {:noreply, finish(state, handle)}
 
       _done ->
@@ -180,7 +198,7 @@ defmodule MobSensors.Server do
 
     case call_native(state, :start, [handle, code, string_type, period_us]) do
       :ok ->
-        timer = timeout_ms && Process.send_after(self(), {:read_timeout, handle}, timeout_ms)
+        timer = timeout_ms && Process.send_after(self(), {:timeout, handle}, timeout_ms)
         sub = %{pid: pid, ref: Process.monitor(pid), type: type, mode: mode, timer: timer}
         {:reply, :ok, put_in(state.subs[handle], sub)}
 
@@ -190,7 +208,7 @@ defmodule MobSensors.Server do
         send(pid, {:mob_sensors, :error, type, :permission})
         {:reply, :ok, state}
 
-      unavailable when unavailable in [:unavailable, :nif_not_loaded] ->
+      unavailable when unavailable in [:unavailable, :native_unavailable] ->
         {:reply, {:error, :unavailable}, state}
     end
   end
@@ -218,16 +236,26 @@ defmodule MobSensors.Server do
 
   defp next_handle(state), do: {state.next, %{state | next: state.next + 1}}
 
-  # A host build (and `mix test`) has no NIF linked: report that as a value so
-  # each caller maps it (empty list, :unavailable) instead of crashing.
+  # A host build (and `mix test`) has no NIF linked, and a NIF rejects
+  # arguments it can't represent with badarg: report both as a value each
+  # caller maps (empty list, :unavailable) so one bad call can't take down
+  # every other caller's listeners with the server.
   defp call_native(state, fun, args) do
     apply(state.native, fun, args)
   rescue
     error in ErlangError ->
       case error do
-        %ErlangError{original: :nif_not_loaded} -> :nif_not_loaded
+        %ErlangError{original: :nif_not_loaded} -> :native_unavailable
         _other -> reraise error, __STACKTRACE__
       end
+
+    error in ArgumentError ->
+      Logger.warning(
+        "mob_sensors: #{fun}/#{length(args)} rejected #{inspect(args)}: " <>
+          Exception.message(error)
+      )
+
+      :native_unavailable
   end
 
   defp to_info(entry) do

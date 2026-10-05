@@ -70,22 +70,36 @@ defmodule MobSensorsTest do
     test "an unknown type is reported before the native layer is asked" do
       assert {:error, :unknown_type} = MobSensors.read(:bogus)
       assert {:error, :unknown_type} = MobSensors.start("")
+      # Vendor string types must fit the native buffer and be valid UTF-8.
+      assert {:error, :unknown_type} = MobSensors.read(String.duplicate("x", 256))
+      assert {:error, :unknown_type} = MobSensors.read(<<0xFF, 0xFE>>)
     end
   end
 
   describe "option validation" do
-    test "timeout_ms and interval_ms must be positive integers" do
+    test "timeout_ms and interval_ms must be integers the platform can represent" do
       assert_raise ArgumentError, ~r/:timeout_ms/, fn ->
         MobSensors.read(:pressure, timeout_ms: 0)
+      end
+
+      assert_raise ArgumentError, ~r/:timeout_ms/, fn ->
+        MobSensors.read(:pressure, timeout_ms: 4_294_967_296)
       end
 
       assert_raise ArgumentError, ~r/:interval_ms/, fn ->
         MobSensors.start(:pressure, interval_ms: 1.5)
       end
+
+      # Microseconds must fit the native 32-bit period.
+      assert_raise ArgumentError, ~r/:interval_ms/, fn ->
+        MobSensors.start(:pressure, interval_ms: 2_147_484)
+      end
     end
 
-    test "steps/2 needs integer milliseconds in order" do
+    test "steps/2 needs Unix milliseconds in order, within int64" do
       assert_raise ArgumentError, fn -> MobSensors.steps(2, 1) end
+      assert_raise ArgumentError, fn -> MobSensors.steps(-1, 1) end
+      assert_raise ArgumentError, fn -> MobSensors.steps(0, 9_223_372_036_854_775_808) end
       assert_raise ArgumentError, fn -> MobSensors.steps(~D[2026-01-01], 1) end
     end
   end

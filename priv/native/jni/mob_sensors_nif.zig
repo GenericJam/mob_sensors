@@ -9,7 +9,7 @@
 //! `get_jenv` + `g_jvm` are mob-core exports linked into the same `.so`.
 //!
 //! Message shapes sent to the server pid (see src/mob_sensors_nif.erl):
-//!   {mob_sensors_native, Handle, reading, [float()], UnixMs, Accuracy}
+//!   {mob_sensors_native, Handle, reading, [float()], UnixMs, Accuracy | nil}
 //!   {mob_sensors_native, Handle, error, permission | unavailable}
 const std = @import("std");
 const erts = @import("erts");
@@ -112,7 +112,8 @@ export fn Java_io_mob_sensors_MobSensorsBridge_nativeDeliverReading(
         erts.atom(env, "reading"),
         erts.makeList(env, terms[0..len]),
         erts.enif_make_int64(env, ts_ms),
-        erts.enif_make_int(env, accuracy),
+        // Trigger sensors carry no accuracy; Kotlin passes Int.MIN_VALUE.
+        if (accuracy == std.math.minInt(jni.JInt)) erts.atom(env, "nil") else erts.enif_make_int(env, accuracy),
     });
     _ = erts.enif_send(null, &pid, env, msg);
 }

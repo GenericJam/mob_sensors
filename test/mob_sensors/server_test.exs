@@ -10,6 +10,7 @@ defmodule MobSensors.ServerTest do
   # real NIF does), so `self()` is the server and readings it sends back take
   # the same path native ones do. Every call is reported to the test.
   defmodule FakeNative do
+    @magnetic_field 2
     @pressure 6
     @proximity 8
     @step_counter 19
@@ -57,6 +58,10 @@ defmodule MobSensors.ServerTest do
         {-1, "com.motorola.sensor.x"} ->
           :ok
 
+        # What a NIF does with an argument it can't represent.
+        {@magnetic_field, nil} ->
+          raise ArgumentError, "argument error"
+
         _other ->
           :unavailable
       end
@@ -64,6 +69,9 @@ defmodule MobSensors.ServerTest do
 
     def stop(handle), do: report(:stop, [handle])
     def stop_all, do: report(:stop_all, [])
+
+    # A query CoreMotion never answers.
+    def steps(handle, 13 = from, to), do: report(:steps, [handle, from, to])
 
     def steps(handle, from, to) do
       report(:steps, [handle, from, to])
@@ -79,7 +87,7 @@ defmodule MobSensors.ServerTest do
 
   setup do
     Process.register(self(), @observer)
-    server = start_supervised!({Server, name: nil, native: FakeNative})
+    server = start_supervised!({Server, name: nil, native: FakeNative, steps_timeout_ms: 50})
     assert_receive {:native, :stop_all, []}
     %{server: server}
   end
@@ -219,5 +227,22 @@ defmodule MobSensors.ServerTest do
                          to: 2_000
                        }}}
     end
+
+    test "a query that is never answered times out", %{server: server} do
+      assert :ok = Server.steps(server, 13, 2_000)
+      assert_receive {:mob_sensors, :steps, {:error, :timeout}}, 500
+    end
+  end
+
+  @tag :capture_log
+  test "a NIF badarg is an :unavailable reply and leaves other streams running",
+       %{server: server} do
+    assert :ok = Server.start(server, :proximity, 200)
+    assert_receive {:native, :start, [handle, 8, nil, _period]}
+
+    assert {:error, :unavailable} = Server.read(server, :magnetic_field, 1_000)
+
+    send(server, {:mob_sensors_native, handle, :reading, [5.0], 1, 0})
+    assert_receive {:mob_sensors, :reading, :proximity, %{values: [5.0]}}
   end
 end
