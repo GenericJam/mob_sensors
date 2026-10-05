@@ -37,8 +37,13 @@ the plugin manifest schema, how to drive a running app, release rules.
   3 permission (non-zero so a throwing call, which returns 0, can't read as
   ok). Readings run on a `HandlerThread`, not the main thread.
 * `priv/native/ios/mob_sensors_nif.m` — iOS. Converts to Android units/axes
-  (acceleration × −9.80665, pressure kPa × 10). Registry mutations happen on
-  one serial dispatch queue; proximity work on the main queue.
+  (acceleration × −9.80665, pressure kPa × 10). One shared `CMMotionManager`
+  (Apple allows one per app): raw accelerometer, and device motion for the
+  bias-corrected gyroscope and calibrated magnetic field. Each stream runs at
+  the fastest handle's interval and `fan_out` throttles slower handles.
+  Registry and motion state live on one serial dispatch queue (the CoreMotion
+  operation queue runs on it); proximity work on the main queue. Each
+  permission request keeps its own CoreMotion object until it replies.
 * `priv/mob_plugin.exs` — manifest: the two NIFs, the
   `:activity_recognition` capability, `ACTIVITY_RECOGNITION`,
   `NSMotionUsageDescription`, CoreMotion.
@@ -50,7 +55,9 @@ the plugin manifest schema, how to drive a running app, release rules.
    registering; iOS reports it from the CoreMotion error.
 2. **iOS has no ambient-light API.** Don't add one through private API.
 3. **iOS proximity blanks the screen** while near. Monitoring is reference
-   counted across handles and switched off with the last one.
+   counted across handles and switched off with the last one, unless the app
+   had it on already. `proximityState` reads far until the sensor settles, so
+   the first sample waits up to 0.3 s after monitoring is switched on.
 4. **Android 12+ caps sampling at 200 Hz** without
    `HIGH_SAMPLING_RATE_SENSORS`, hence the 5 ms `interval_ms` floor.
 5. **The emulator simulates sensors**: `adb emu sensor set pressure 1001.5`
@@ -62,6 +69,8 @@ the plugin manifest schema, how to drive a running app, release rules.
    running to see it (an emulator HAL quirk, not filtered by the plugin).
 6. **The iOS simulator has no sensors**: `list/0` is `[]`, reads are
    `{:error, :unavailable}`, `:activity_recognition` reports `:denied`.
+7. **iPad has no pedometer**, so the Motion & Fitness prompt is raised through
+   `CMAltimeter` there.
 
 ## Testing
 
