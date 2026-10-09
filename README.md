@@ -9,7 +9,7 @@ sensors, read one sample, stream readings, and query step history. Android
 
 ```elixir
 # mix.exs
-{:mob_sensors, "~> 0.1"}
+{:mob_sensors, "~> 0.2"}
 ```
 
 ```elixir
