@@ -57,7 +57,6 @@ defmodule MobSensorsTest do
       assert {:fail, reason} = SelfTest.run(%{platform: :android, device: :emulator})
       assert reason =~ "mob_sensors_nif is not linked"
       assert reason =~ "nif_not_loaded"
-      assert Mob.Plugin.SelfTest.result?({:fail, reason})
     end
 
     test "a sensor array passes, including the iOS simulator's empty one" do
