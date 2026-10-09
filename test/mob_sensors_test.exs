@@ -2,7 +2,7 @@ defmodule MobSensorsTest do
   use ExUnit.Case, async: true
 
   alias MobDev.Plugin.{Manifest, Validator}
-  alias MobSensors.Types
+  alias MobSensors.{SelfTest, Types}
 
   @plugin_dir Path.expand("..", __DIR__)
 
@@ -43,6 +43,54 @@ defmodule MobSensorsTest do
       end
 
       assert File.exists?(Path.join(@plugin_dir, m.android.bridge_kt))
+    end
+
+    test "declares the self-test, which passes the validator without a warning", %{manifest: m} do
+      assert m.selftest == MobSensors.SelfTest
+      assert %{errors: [], warnings: warnings} = Validator.validate_plugin(m, @plugin_dir)
+      refute Enum.any?(warnings, &(&1 =~ "selftest"))
+    end
+  end
+
+  describe "MobSensors.SelfTest" do
+    test "on a host with no native library linked it fails, naming the NIF, instead of raising" do
+      assert {:fail, reason} = SelfTest.run(%{platform: :android, device: :emulator})
+      assert reason =~ "mob_sensors_nif is not linked"
+      assert reason =~ "nif_not_loaded"
+    end
+
+    test "a sensor array passes, including the iOS simulator's empty one" do
+      assert SelfTest.classify("[]") == :pass
+
+      assert SelfTest.classify(
+               ~s([{"type":6,"string_type":"android.sensor.pressure","name":"Goldfish Pressure"},) <>
+                 ~s({"type":65537,"string_type":"com.motorola.sensor.x","name":null}])
+             ) == :pass
+    end
+
+    test "an unwired Android bridge fails, naming what the bootstrap missed" do
+      assert {:fail, "Kotlin MobSensorsBridge not registered" <> _} =
+               SelfTest.classify({:error, :bridge_not_registered})
+
+      assert {:fail, "MobSensorsBridge has no Activity" <> _} =
+               SelfTest.classify({:error, :no_activity})
+
+      assert SelfTest.classify({:error, :bridge_exception}) ==
+               {:fail, "list/0 could not reach SensorManager: :bridge_exception"}
+    end
+
+    test "anything but a JSON array of sensors fails" do
+      for answer <- [
+            "",
+            "not json",
+            "{}",
+            "[1]",
+            ~s([{"name":"no type"}]),
+            ~s([{"type":"6"}]),
+            :ok
+          ] do
+        assert {:fail, "list/0 returned " <> _} = SelfTest.classify(answer), inspect(answer)
+      end
     end
   end
 

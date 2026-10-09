@@ -102,9 +102,11 @@ object MobSensorsBridge : io.mob.plugin.MobActivityAware, io.mob.plugin.MobPermi
     private fun sensorManager(): SensorManager? =
         appContext?.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
 
+    // null until setActivity gave the bridge a Context: the NIF answers
+    // {error, no_activity}, which MobSensors.SelfTest fails on.
     @JvmStatic
-    fun sensors_list(): String {
-        val sm = sensorManager() ?: return "[]"
+    fun sensors_list(): String? {
+        val sm = sensorManager() ?: return null
         val out = JSONArray()
         for (s in sm.getSensorList(Sensor.TYPE_ALL)) {
             val o = JSONObject()

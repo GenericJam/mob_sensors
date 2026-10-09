@@ -31,9 +31,10 @@ const ERR_PERMISSION: c_int = 2;
 // Android SensorEvent.values is at most 16 floats (TYPE_POSE_6DOF uses 15).
 const MAX_VALUES = 32;
 
-// mob-core's jni module leaves GetDoubleArrayRegion untyped (?*anyopaque);
-// this is its jni.h signature.
+// mob-core's jni module leaves GetDoubleArrayRegion and ExceptionOccurred
+// untyped (?*anyopaque); these are their jni.h signatures.
 const GetDoubleArrayRegionFn = *const fn (env: *jni.JNIEnv, arr: jni.JObject, start: jni.JInt, len: jni.JInt, buf: [*]f64) callconv(.c) void;
+const ExceptionOccurredFn = *const fn (env: *jni.JNIEnv) callconv(.c) jni.JObject;
 
 const Methods = struct {
     list: jni.JMethodID = null,
@@ -149,21 +150,42 @@ fn makeBinary(env: ?*erts.ErlNifEnv, bytes: []const u8) erts.ERL_NIF_TERM {
     return erts.enif_make_binary(env, &bin);
 }
 
-/// list() -> JSON binary describing every sensor ("[]" if the bridge is absent).
+// {error, Reason}: list() could not ask SensorManager. MobSensors.Server maps
+// it to [] (the public list/0 is unchanged); MobSensors.SelfTest fails on it,
+// since a host where it happens can never see a sensor (MOB-418).
+fn listError(env: ?*erts.ErlNifEnv, comptime reason: [:0]const u8) erts.ERL_NIF_TERM {
+    return erts.makeTuple(env, .{ erts.atom(env, "error"), erts.atom(env, reason) });
+}
+
+/// list() -> JSON binary describing every sensor, or {error, Reason}:
+///   bridge_not_registered  nativeRegister never ran (MobPluginBootstrap did not
+///                          call register()) or the sensors_list lookup failed
+///   no_jni_env             no JNIEnv for this scheduler thread
+///   no_activity            the bootstrap never handed the bridge an Activity
+///   bridge_exception       sensors_list threw (the exception is cleared)
+///   string_unavailable     GetStringUTFChars failed (out of memory)
 fn nif_list(env: ?*erts.ErlNifEnv, argc: c_int, argv: [*]const erts.ERL_NIF_TERM) callconv(.c) erts.ERL_NIF_TERM {
     _ = argc;
     _ = argv;
-    if (g_cls == null or g_m.list == null) return makeBinary(env, "[]");
+    if (g_cls == null or g_m.list == null) return listError(env, "bridge_not_registered");
     var attached: c_int = 0;
-    const jenv = get_jenv(&attached) orelse return makeBinary(env, "[]");
+    const jenv = get_jenv(&attached) orelse return listError(env, "no_jni_env");
     defer detachIfAttached(attached);
 
     const jstr: jni.JString = jenv.*.CallStaticObjectMethod.?(jenv, g_cls, g_m.list);
-    jni.exceptionClear(jenv);
-    if (jstr == null) return makeBinary(env, "[]");
+    const exception_occurred: ExceptionOccurredFn = @ptrCast(@alignCast(jenv.*.ExceptionOccurred.?));
+    const thrown = exception_occurred(jenv);
+    if (thrown != null) {
+        jni.exceptionClear(jenv);
+        jni.deleteLocalRef(jenv, thrown);
+        if (jstr != null) jni.deleteLocalRef(jenv, jstr);
+        return listError(env, "bridge_exception");
+    }
+    // sensors_list returns null only when it has no Context (no Activity yet).
+    if (jstr == null) return listError(env, "no_activity");
     defer jni.deleteLocalRef(jenv, jstr);
 
-    const chars = jni.getStringUTFChars(jenv, jstr) orelse return makeBinary(env, "[]");
+    const chars = jni.getStringUTFChars(jenv, jstr) orelse return listError(env, "string_unavailable");
     defer jni.releaseStringUTFChars(jenv, jstr, chars);
     return makeBinary(env, std.mem.span(chars));
 }

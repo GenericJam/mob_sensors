@@ -25,6 +25,11 @@ init() ->
     end.
 
 %% JSON array (binary) describing every sensor the platform exposes.
+%% Android answers {error, Reason} when it can't ask SensorManager:
+%% bridge_not_registered (MobSensorsBridge.register() never ran or the
+%% sensors_list lookup failed), no_activity (no Activity handed to the
+%% bridge), no_jni_env, bridge_exception or string_unavailable. The server
+%% maps that to []; MobSensors.SelfTest fails on it.
 list() ->
     erlang:nif_error(nif_not_loaded).
 

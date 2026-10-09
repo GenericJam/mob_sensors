@@ -25,6 +25,10 @@ config :mob, :trusted_plugins, %{
 Then `mix mob.deploy --native`: the plugin's NIFs reach the device only
 through a native build.
 
+Run `mix mob.selftest` from a host app (mob_dev 0.7.17+) to check on a device
+that the native side is linked and wired up (`MobSensors.SelfTest`, one
+read-only sensor-list call: no listener, no permission prompt).
+
 ## Use
 
 Call from any process; results arrive in that process's mailbox.

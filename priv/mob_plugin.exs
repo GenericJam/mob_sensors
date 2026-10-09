@@ -5,6 +5,9 @@
   description:
     "Every phone sensor: list, one-shot read, streaming, step history " <>
       "(Android SensorManager; iOS CoreMotion, CMAltimeter, CMPedometer, proximity)",
+  # On-device proof for `mix mob.selftest` / mob_ci: one read-only
+  # :mob_sensors_nif.list/0 call (see Mob.Plugin.SelfTest).
+  selftest: MobSensors.SelfTest,
   nifs: [
     # iOS: Objective-C NIF over CMMotionManager / CMAltimeter / CMPedometer and
     # UIDevice proximity monitoring. Also self-registers the
