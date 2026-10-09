@@ -28,10 +28,17 @@ the plugin manifest schema, how to drive a running app, release rules.
   units. Both natives speak those codes (iOS answers to 1, 2, 4, 6, 8, 19).
   Never create atoms from native strings: unknown codes become the sensor's
   string type.
+* `lib/mob_sensors/self_test.ex` — `MobSensors.SelfTest`
+  (`Mob.Plugin.SelfTest`, the manifest's `selftest:`): one
+  `:mob_sensors_nif.list/0` call. A JSON sensor array passes (also `[]`);
+  every `{:error, _}` and the stub's `nif_not_loaded` fail. Run it with
+  `mix mob.selftest` from a host app.
 * `src/mob_sensors_nif.erl` — NIF stub: `list/0`, `start/4`, `stop/1`,
   `stop_all/0`, `steps/3`. Documents the native message shapes. On a host
   build every call raises `nif_not_loaded`, which the server maps to `[]` /
-  `{:error, :unavailable}`.
+  `{:error, :unavailable}`. Android `list/0` answers `{:error, reason}`
+  (`:bridge_not_registered`, `:no_activity`, ...) when it can't reach
+  `SensorManager`; the server maps that to `[]` and logs a warning.
 * `priv/native/jni/mob_sensors_nif.zig` + `priv/native/android/MobSensorsBridge.kt`
   — Android. `sensors_start` result codes are 1 ok / 2 unavailable /
   3 permission (non-zero so a throwing call, which returns 0, can't read as
@@ -44,7 +51,7 @@ the plugin manifest schema, how to drive a running app, release rules.
   Registry and motion state live on one serial dispatch queue (the CoreMotion
   operation queue runs on it); proximity work on the main queue. Each
   permission request keeps its own CoreMotion object until it replies.
-* `priv/mob_plugin.exs` — manifest: the two NIFs, the
+* `priv/mob_plugin.exs` — manifest: the self-test, the two NIFs, the
   `:activity_recognition` capability, `ACTIVITY_RECOGNITION`,
   `NSMotionUsageDescription`, CoreMotion.
 
@@ -82,8 +89,9 @@ mix test
 `test/mob_sensors/server_test.exs` drives the server with a fake native
 module (the real message shapes, timeouts, caller-exit cleanup);
 `test/mob_sensors_test.exs` covers the manifest, the NIF stub, the host
-fallback and type mapping. Native code is only exercised by a
-`mix mob.deploy --native` of a host app with this plugin as a path dep.
+fallback, type mapping and the self-test's classification. Native code is
+only exercised on a device: `mix mob.selftest` (or `mix mob.deploy --native`)
+from a host app with this plugin as a path dep.
 
 ## Worktrees
 

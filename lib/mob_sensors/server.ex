@@ -80,8 +80,17 @@ defmodule MobSensors.Server do
   def handle_call(:list, _from, state) do
     infos =
       case call_native(state, :list, []) do
-        json when is_binary(json) -> json |> JSON.decode!() |> Enum.map(&to_info/1)
-        :native_unavailable -> []
+        json when is_binary(json) ->
+          json |> JSON.decode!() |> Enum.map(&to_info/1)
+
+        # Android: the bridge is not wired into this host (see
+        # src/mob_sensors_nif.erl); MobSensors.SelfTest reports it.
+        {:error, reason} ->
+          Logger.warning("mob_sensors: list/0 could not reach SensorManager: #{inspect(reason)}")
+          []
+
+        :native_unavailable ->
+          []
       end
 
     {:reply, infos, state}

@@ -37,13 +37,15 @@ defmodule MobSensors.MixProject do
   end
 
   defp deps do
-    # mob ~> 0.9.6: plugin OTP applications are started on device from that
-    # release on (Mob.Plugins.start/0), and MobSensors.Server lives in this
-    # plugin's supervision tree. :mob_dev is test-only (the manifest tests run
-    # the real pre-publish validator) and never ships.
+    # mob >= 0.9.15: Mob.Plugin.SelfTest (MobSensors.SelfTest implements it);
+    # plugin OTP applications are started on device since 0.9.6
+    # (Mob.Plugins.start/0), and MobSensors.Server lives in this plugin's
+    # supervision tree. :mob_dev is test-only (the manifest tests run the real
+    # pre-publish validator, which knows `selftest:` from 0.7.17) and never
+    # ships.
     [
-      {:mob, "~> 0.9.6"},
-      {:mob_dev, "~> 0.7", only: [:dev, :test], runtime: false},
+      {:mob, "~> 0.9 and >= 0.9.15"},
+      {:mob_dev, "~> 0.7.17", only: [:dev, :test], runtime: false},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:ex_slop, "~> 0.4.2", only: [:dev, :test], runtime: false},

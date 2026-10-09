@@ -85,6 +85,12 @@ defmodule MobSensors.ServerTest do
     end
   end
 
+  # The Android NIF in a host whose bootstrap never wired the bridge.
+  defmodule UnwiredNative do
+    def list, do: {:error, :bridge_not_registered}
+    def stop_all, do: :ok
+  end
+
   setup do
     Process.register(self(), @observer)
     server = start_supervised!({Server, name: nil, native: FakeNative, steps_timeout_ms: 50})
@@ -108,6 +114,13 @@ defmodule MobSensors.ServerTest do
     assert %{type: "com.motorola.sensor.x", unit: nil, vendor: nil, max_range: nil} = vendor
     # A hidden Android type without a public constant keeps its string type.
     assert %{type: "android.sensor.tilt_detector", wake_up: nil} = hidden
+  end
+
+  test "list/0 is [] and logs the reason when the Android bridge is not wired" do
+    server = start_supervised!({Server, name: nil, native: UnwiredNative}, id: :unwired)
+
+    log = ExUnit.CaptureLog.capture_log(fn -> assert Server.list(server) == [] end)
+    assert log =~ "list/0 could not reach SensorManager: :bridge_not_registered"
   end
 
   describe "read" do

@@ -6,6 +6,28 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **On-device self-test** (MOB-418). `MobSensors.SelfTest` implements
+  `Mob.Plugin.SelfTest` and is declared in the manifest as `selftest:`. It
+  makes one read-only `:mob_sensors_nif.list/0` call: a JSON sensor array
+  passes (the iOS simulator's `[]` too), an Android bridge the bootstrap
+  never wired fails, and so does a NIF that isn't linked. Run it with
+  `mix mob.selftest` from a host app (mob_dev 0.7.17).
+
+### Changed
+
+- Requires mob >= 0.9.15 (was `~> 0.9.6`), for `Mob.Plugin.SelfTest`.
+- **Android: the list NIF reports why it can't reach `SensorManager`.**
+  `:mob_sensors_nif.list/0` answers `{:error, :bridge_not_registered}`
+  (`MobSensorsBridge.register()` never ran or the `sensors_list` lookup
+  failed), `{:error, :no_activity}` (no Activity handed to the bridge), or
+  `:no_jni_env` / `:bridge_exception` / `:string_unavailable`, instead of
+  `"[]"`. `MobSensors.list/0` still returns `[]` then, and now logs a
+  warning with the reason.
+
 ## [0.1.0] - 2026-10-04
 
 Initial release (MOB-389). Every phone sensor for Mob apps.
